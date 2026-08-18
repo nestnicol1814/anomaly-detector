@@ -53,7 +53,12 @@ def normalize_key(value):
     return s
 
 
-COMPANY_CODE_WIDTH = 4   # SAP company codes are 4 chars; set to None to disable padding
+# Zero-pad purely-numeric company codes to this width so '100' and '0100'
+# match. OFF by default: it only helps when the two files store the SAME code
+# at different widths, and it HURTS if it transforms one file's codes and not
+# the other's. Run diagnose_rows.py first -- turn this on (e.g. 4) only if the
+# "sample constructed ids" show a leading-zero mismatch between the files.
+COMPANY_CODE_WIDTH = None
 
 
 def normalize_company_code(value, width=COMPANY_CODE_WIDTH):
@@ -70,10 +75,26 @@ def normalize_company_code(value, width=COMPANY_CODE_WIDTH):
     return s
 
 
+def normalize_doc_nr(value):
+    """Document numbers: the AI export stores them as TEXT with a leading zero
+    ('0510001617') while the ML export stores them as numbers ('510001617').
+    Confirmed by diagnose_rows.py on the real files: this single mismatch was
+    the join-key failure. Reading the AI column as int64 used to strip the
+    zero by accident (which is why ~10k matched before dtype=str); we now
+    strip leading zeros from purely-numeric doc numbers deliberately, on BOTH
+    sides, so both files build the same key."""
+    s = normalize_key(value)
+    if s is None:
+        return None
+    if s.isdigit():
+        s = s.lstrip("0") or "0"
+    return s
+
+
 def make_transaction_id(company_code, doc_nr):
     """The ONE place the join key is built. Returns None if either part is missing."""
     cc = normalize_company_code(company_code)
-    doc = normalize_key(doc_nr)
+    doc = normalize_doc_nr(doc_nr)
     if cc is None or doc is None:
         return None
     return f"{cc}_{doc}"
@@ -161,7 +182,7 @@ def load_ml_table(excel_path, on_duplicate="last"):
             "ml_flags": {rid: rid in triggered for rid in RULE_FLAGS},
             "metadata": {
                 "company_code": normalize_company_code(row.get("[Company Code]")),
-                "document_nr": normalize_key(row.get("[Document Nr]")),
+                "document_nr": normalize_doc_nr(row.get("[Document Nr]")),
                 "supplier_nr": _cell(row, "[Supplier Nr]"),
                 "supplier_name": _cell(row, "[Supplier name]"),
                 "source_row": idx + 2,
@@ -213,12 +234,12 @@ def load_AI_table(excel_path, on_duplicate="last"):
         }
         entry = {
             "report_text": (f"Company: {normalize_company_code(row.get('COMPANY_CODE'))}, "
-                            f"Doc: {normalize_key(row.get('DOCUMENT_NR'))}, "
+                            f"Doc: {normalize_doc_nr(row.get('DOCUMENT_NR'))}, "
                             f"Supplier: {_cell(row, 'COMPANY_NAME')}"),
             "ai_flags": flags,
             "metadata": {
                 "company_code": normalize_company_code(row.get("COMPANY_CODE")),
-                "document_nr": normalize_key(row.get("DOCUMENT_NR")),
+                "document_nr": normalize_doc_nr(row.get("DOCUMENT_NR")),
                 "supplier_nr": _cell(row, "SUPPLIER_NR"),
                 "supplier_name": _cell(row, "COMPANY_NAME"),
                 "source_row": idx + 2,

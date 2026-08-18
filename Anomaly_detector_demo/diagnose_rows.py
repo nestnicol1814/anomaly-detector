@@ -34,7 +34,7 @@ def hr(title):
 
 # Use the SAME normalization the fixed loaders use, so "normalized match count"
 # below is exactly what fraud_eval will produce -- not a separate guess.
-from fraud_eval.loaders import normalize_key, normalize_company_code
+from fraud_eval.loaders import normalize_key, normalize_company_code, normalize_doc_nr
 
 
 def audit_file(label, path, cc_col, doc_col):
@@ -72,7 +72,7 @@ def audit_file(label, path, cc_col, doc_col):
                df_inferred[doc_col].astype(str).str.strip())
     # ids under the NORMALIZED construction
     norm_ids = (df_str[cc_col].map(normalize_company_code).fillna("<MISSING>") + "_" +
-                df_str[doc_col].map(normalize_key).fillna("<MISSING>"))
+                df_str[doc_col].map(normalize_doc_nr).fillna("<MISSING>"))
 
     n_unique_cur = cur_ids.nunique()
     n_unique_norm = norm_ids.nunique()
