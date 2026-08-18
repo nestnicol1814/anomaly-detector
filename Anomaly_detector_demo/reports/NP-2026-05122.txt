@@ -1,0 +1,73 @@
+**Executive Summary**
+
+Transaction NP-2026-05122 presents low risk. value_custom = 8400, well below relevant thresholds. Vendor is an established supplier with a multi-year Non-PO payment history. No geographic mismatch identified. Scenario applied: A — all top 5 similar cases were cleared as false positives. Verify whether the same clearing rationale applies to the current case: established supplier with regular payment history matches the current case profile.
+
+**Detailed Analysis**
+
+**2.1 Transaction Analysis**
+
+value_custom = 8400 CHF. document_type_text = Non-PO Invoice. bucket_invoice = Under 10K. No accounting inconsistencies noted.
+
+**2.2 Geolocation Review**
+
+supplier_country = France, bank_ctry = France. No mismatch. bank_ctry_tax_haven = No. bank_ctry_exotic_country = No.
+
+**2.3 Supplier Profile Consistency**
+
+one_time_supplier = No. supplier_create_date to d_entry_date computed difference = 1140 days. supplier_non_po_last_two_months = Yes.
+
+**2.4 Behavioral Indicators**
+
+Behavioral Indicator | Observed Evidence | Source
+
+No behavioral indicators detected | n/a | n/a
+
+**2.5 Historical Case Correlation**
+
+Scenario applied: A — all top 5 similar cases share resolution_id=20 (False Positive).
+
+Key field-level similarities: same supplier_group, comparable value_custom range, same document_type_text.
+
+Risk classification derived from the scenario: Low, Historical Pattern Risk 2-5.
+
+Human agent evaluation required: No.
+
+**Risk Detection Metrics**
+
+Risk Theme | Supporting Evidence | Risk Level
+
+Transaction Size Risk | value_custom = 8400 | Low
+
+Supplier Lifecycle Risk | supplier active 1140 days, regular Non-PO history | Low
+
+Geographic and Zone Risk | supplier_country = bank_ctry = France | Low
+
+Control Flag Aggregate | 0 flags triggered | Low
+
+Behavioral Pattern Risk | none detected | Low
+
+Historical Case Alignment | Scenario A, all cleared as false positive | Low
+
+**Risk Probability Score**
+
+Component | Max Score | Score Awarded | Justification
+
+Transaction Value | 20 | 1 | value_custom = 8400, below CHF 10K band
+
+Supplier Risk Profile | 15 | 1 | established supplier, regular Non-PO history, one_time_supplier=No
+
+Geographic and Zone Risk | 15 | 0 | supplier_country and bank_ctry both France, fully aligned
+
+Control Flags | 20 | 0 | record_at_weekend: not triggered (Low); payment_at_weekend: not triggered (Low); less_than_30_days_vendor_creation_non_po: not triggered (High); less_than_30_days_bank_change_non_po: not triggered (High); company_vendor_amount_500k: not triggered (Very High); single_record_supplier_100k: not triggered (Very High); single_record_employee_10k: not triggered (High); supplier_name_starts_zz: not triggered (Medium); bank_tax_haven_vendor_country_mismatch: not triggered (High); bank_tax_haven_vendor_zone_mismatch: not triggered (Very High); vendor_bank_zone_mismatch: not triggered (Medium); bank_exotic_danger_country: not triggered (High); user_non_po_own_employee: not triggered (Very High); document_before_vendor_creation: not triggered (Medium)
+
+Behavioral Risk | 10 | 0 | no behavioral indicators detected
+
+Historical Pattern Risk | 20 | 4 | Scenario A applied, all top 5 similar cases cleared as false positive, band 2-5 selected at 4
+
+TOTAL | 100 | 6 |
+
+RISK_PROBABILITY_SCORE: 6
+
+**Conclusion**
+
+Clear the case.

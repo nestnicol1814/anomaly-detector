@@ -1,0 +1,4 @@
+transaction_id,ml_decision,R01,R02,R03,R04,R05,R06,R07,R08,R09,R13,R14,R15,R16,R17,R27
+NP-2026-04471,Confirmed,False,False,True,False,False,False,True,False,False,False,True,False,False,False,False
+NP-2026-05122,Cleared,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False
+NP-2026-06008,Cleared,False,False,False,False,False,True,False,False,False,False,False,False,False,False,False

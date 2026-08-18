@@ -1,0 +1,79 @@
+**Executive Summary**
+
+Transaction NP-2026-04471 presents elevated risk. value_custom = 145000 exceeds the CHF 100K single-record threshold (single_record_supplier_100k). The vendor was created 12 days before this Non-PO entry (dc_vendor_create_date to d_entry_date), well inside the 30-day window. A bank country mismatch was identified between bank_ctry and supplier_country. Historical correlation: Scenario applied: B — one Confirmed prior case (resolution_id=10) found among the top similar cases. Risk classification derived from the scenario: High, score range 16-18. Human agent evaluation is not required for Scenario B.
+
+**Detailed Analysis**
+
+**2.1 Transaction Analysis**
+
+value_custom = 145000 CHF, exceeding single_record_supplier_100k threshold. document_type_text = Non-PO Invoice. bucket_invoice = 100K-500K. No accounting inconsistencies noted in debit_credit.
+
+**2.2 Geolocation Review**
+
+supplier_country = Germany, bank_ctry = Panama. bank_ctry_exotic_country = Yes. Fields are populated and confirm a raw mismatch independent of the boolean rule flags.
+
+**2.3 Supplier Profile Consistency**
+
+one_time_supplier = No. supplier_create_date to d_entry_date computed difference = 12 days, below the 30-day threshold. supplier_non_po_last_two_months = No.
+
+**2.4 Behavioral Indicators**
+
+Behavioral Indicator | Observed Evidence | Source
+
+Vendor created 12 days before Non-PO | dc_vendor_create_date to d_entry_date = 12 days | Rule trigger
+
+Single record above CHF 100K | value_custom = 145000 | Rule trigger
+
+Bank country not exotic-flagged tax haven mismatch with vendor country | bank_ctry=Panama vs supplier_country=Germany, bank_ctry_tax_haven=Yes | Rule trigger
+
+Recurring invoice amounts near approval threshold across three entries | document_text pattern across last 3 Non-PO entries for this supplier | AI detected
+
+**2.5 Historical Case Correlation**
+
+Scenario applied: B — top similar cases include one Confirmed case (resolution_id=10) with similarity score 0.81.
+
+Key field-level similarities: same supplier_group, comparable value_custom range, same entry_user pattern.
+
+Risk classification derived from the scenario: High, Historical Pattern Risk 16-18.
+
+Human agent evaluation required: No.
+
+**Risk Detection Metrics**
+
+Risk Theme | Supporting Evidence | Risk Level
+
+Transaction Size Risk | value_custom = 145000 | High
+
+Supplier Lifecycle Risk | vendor created 12 days before entry | High
+
+Geographic and Zone Risk | bank_ctry=Panama, bank_ctry_tax_haven=Yes | High
+
+Control Flag Aggregate | 3 flags triggered | High
+
+Behavioral Pattern Risk | recurring invoice amounts detected | Medium
+
+Historical Case Alignment | Scenario B, 1 confirmed similar case | High
+
+**Risk Probability Score**
+
+Component | Max Score | Score Awarded | Justification
+
+Transaction Value | 20 | 16 | value_custom = 145000, within CHF 100K-500K band, single_record_supplier_100k triggered
+
+Supplier Risk Profile | 15 | 12 | computed day difference between d_entry_date and dc_vendor_create_date = 12, less than 30, one_time_supplier=No so mid-range score
+
+Geographic and Zone Risk | 15 | 13 | bank_ctry_tax_haven_vendor_country_mismatch triggered: not triggered (Low), bank_ctry differs from supplier_country and bank_ctry_exotic_country=Yes so exotic-country scoring band applies
+
+Control Flags | 20 | 15 | less_than_30_days_vendor_creation_non_po: triggered (High); single_record_supplier_100k: triggered (Very High); bank_tax_haven_vendor_country_mismatch: triggered (High); bank_tax_haven_vendor_zone_mismatch: not triggered (Very High); user_non_po_own_employee: not triggered (Very High); record_at_weekend: not triggered (Low); payment_at_weekend: not triggered (Low)
+
+Behavioral Risk | 10 | 6 | recurring invoice amounts near approval threshold detected across 3 entries, AI-detected pattern not covered by explicit rules
+
+Historical Pattern Risk | 20 | 17 | Scenario B applied, Confirmed case similarity score 0.81, band 16-18 selected at 17
+
+TOTAL | 100 | 79 |
+
+RISK_PROBABILITY_SCORE: 79
+
+**Conclusion**
+
+Escalate for full investigation.

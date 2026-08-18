@@ -1,0 +1,75 @@
+**Executive Summary**
+
+Transaction NP-2026-06008 presents elevated risk. value_custom = 512300, exceeding the CHF 500K company-vendor cumulative threshold. supplier_name appears to start with ZZ, a known low-quality vendor naming pattern. Scenario applied: C, Sub-case C2 — similar cases cleared with fully verifiable rationale, but current transaction diverges due to the amount threshold breach.
+
+**Detailed Analysis**
+
+**2.1 Transaction Analysis**
+
+value_custom = 512300 CHF. document_type_text = Non-PO Invoice. bucket_invoice = Over 500K.
+
+**2.2 Geolocation Review**
+
+supplier_country = Switzerland, bank_ctry = Switzerland. No mismatch.
+
+**2.3 Supplier Profile Consistency**
+
+one_time_supplier = No. supplier_create_date to d_entry_date computed difference = 620 days.
+
+**2.4 Behavioral Indicators**
+
+Behavioral Indicator | Observed Evidence | Source
+
+Company code vendor cumulative amount above CHF 500K | value_custom cumulative = 512300 | Rule trigger
+
+Supplier name pattern matches ZZ convention | supplier_name = ZZ-Vendor-Services | Rule trigger
+
+**2.5 Historical Case Correlation**
+
+Scenario applied: C, Sub-case C2 — all top 5 similar cases cleared as false positive or unusual but justified with fully verifiable rationale (established supplier, amount within approved threshold for this market).
+
+Key field-level similarities: same supplier_group, same document_type_text.
+
+Risk classification derived from the scenario: Low, Historical Pattern Risk 2-6.
+
+Human agent evaluation required: No.
+
+**Risk Detection Metrics**
+
+Risk Theme | Supporting Evidence | Risk Level
+
+Transaction Size Risk | value_custom = 512300 | High
+
+Supplier Lifecycle Risk | supplier active 620 days | Low
+
+Geographic and Zone Risk | supplier_country = bank_ctry = Switzerland | Low
+
+Control Flag Aggregate | 2 flags triggered | Medium
+
+Behavioral Pattern Risk | none detected | Low
+
+Historical Case Alignment | Scenario C2, verifiable clearing rationale | Low
+
+**Risk Probability Score**
+
+Component | Max Score | Score Awarded | Justification
+
+Transaction Value | 20 | 18 | value_custom = 512300, exceeds CHF 500K, company_vendor_amount_500k triggered
+
+Supplier Risk Profile | 15 | 2 | established supplier, regular Non-PO history
+
+Geographic and Zone Risk | 15 | 0 | supplier_country and bank_ctry both Switzerland, fully aligned
+
+Control Flags | 20 | 10 | company_vendor_amount_500k: triggered (High); supplier_name_starts_zz: triggered (Medium); record_at_weekend: not triggered (Low); payment_at_weekend: not triggered (Low); less_than_30_days_vendor_creation_non_po: not triggered (High); less_than_30_days_bank_change_non_po: not triggered (High); single_record_supplier_100k: not triggered (Very High); single_record_employee_10k: not triggered (High); bank_tax_haven_vendor_country_mismatch: not triggered (High); bank_tax_haven_vendor_zone_mismatch: not triggered (Very High); vendor_bank_zone_mismatch: not triggered (Medium); bank_exotic_danger_country: not triggered (High); user_non_po_own_employee: not triggered (Very High); document_before_vendor_creation: not triggered (Medium)
+
+Behavioral Risk | 10 | 0 | no behavioral indicators detected
+
+Historical Pattern Risk | 20 | 5 | Scenario C2 applied, fully verifiable clearing rationale, band 2-6 selected at 5
+
+TOTAL | 100 | 35 |
+
+RISK_PROBABILITY_SCORE: 35
+
+**Conclusion**
+
+Escalate for full investigation.
