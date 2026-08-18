@@ -3,128 +3,258 @@ File loaders for the two input datasets:
   - the ML rule-trigger table (Excel) with comma-separated rule markers
   - the AI rule table (Excel) with binary rule columns (R01-R27)
 
+Row-loss safeguards (see diagnose_rows.py for the audit that motivated them):
+
+  1. Key columns are read with dtype=str so pandas can never turn a document
+     number into a float ("1234567.0") or strip leading zeros from a company
+     code ("0100" -> 100). Either would make the same transaction produce a
+     different id in each file and silently fail the merge.
+  2. Both loaders build the join key through ONE shared function
+     (make_transaction_id) so the two files can't drift apart.
+  3. Duplicate keys are NOT silently overwritten. Every loader returns a
+     LoadReport alongside the data with raw / blank / duplicate / kept counts,
+     and keeps the duplicate rows so you can inspect them.
+
 Both raise a clear ValueError naming the offending file/row rather than
 failing with a bare KeyError deep in some other function.
 """
 import os
-import sys
-import pandas as pd
 import warnings
+from dataclasses import dataclass, field
 
-warnings.filterwarnings('ignore')
+import pandas as pd
 
 from .rules import RULE_FLAGS
 
+warnings.filterwarnings("ignore")
 
-def load_ml_table(excel_path):
-    """Load ML table (Excel) with comma-separated rule marker.
-    
+_MISSING_TOKENS = {"", "nan", "none", "nat", "null"}
+
+
+# ---------------------------------------------------------------------------
+# Shared key handling
+# ---------------------------------------------------------------------------
+
+def normalize_key(value):
+    """Turn a raw cell into a canonical string key, or None if it's missing.
+
+    - NaN / blank / 'nan' / 'None' -> None
+    - trailing '.0' from float-ified integers is removed
+    - surrounding whitespace is stripped
+    Leading zeros are preserved because the columns are read as text.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    s = str(value).strip()
+    if s.lower() in _MISSING_TOKENS:
+        return None
+    if s.endswith(".0") and s[:-2].lstrip("-").isdigit():
+        s = s[:-2]
+    return s
+
+
+COMPANY_CODE_WIDTH = 4   # SAP company codes are 4 chars; set to None to disable padding
+
+
+def normalize_company_code(value, width=COMPANY_CODE_WIDTH):
+    """Company codes need one extra step beyond normalize_key: if the source
+    file stored them as NUMBERS, Excel has already thrown away leading zeros
+    ('0100' -> 100) before Python ever sees the cell. Reading as text can't
+    undo that. So purely-numeric codes are zero-padded to a fixed width, which
+    makes '100', '0100', and 100.0 all collapse to '0100' on BOTH sides."""
+    s = normalize_key(value)
+    if s is None:
+        return None
+    if width and s.isdigit() and len(s) < width:
+        s = s.zfill(width)
+    return s
+
+
+def make_transaction_id(company_code, doc_nr):
+    """The ONE place the join key is built. Returns None if either part is missing."""
+    cc = normalize_company_code(company_code)
+    doc = normalize_key(doc_nr)
+    if cc is None or doc is None:
+        return None
+    return f"{cc}_{doc}"
+
+
+@dataclass
+class LoadReport:
+    """Row accounting for one loaded file. Printed by AnomalyEval.print_summary."""
+    path: str
+    n_raw: int = 0            # rows pandas read
+    n_blank_key: int = 0      # rows dropped because company code or doc nr was missing
+    n_duplicate_rows: int = 0 # rows beyond the first for a repeated key
+    n_kept: int = 0           # unique keys that made it into the table
+    duplicates: dict = field(default_factory=dict)  # key -> list of extra row dicts
+    blank_rows: list = field(default_factory=list)  # first few offending row numbers
+
+    def summary(self):
+        return (f"{os.path.basename(self.path)}: {self.n_raw} rows -> "
+                f"{self.n_blank_key} blank-key dropped, "
+                f"{self.n_duplicate_rows} duplicate rows collapsed, "
+                f"{self.n_kept} unique transactions kept")
+
+
+def _read_excel_text_keys(path, key_cols, label):
+    if not os.path.isfile(path):
+        raise ValueError(f"{label} not found: {path}")
+    try:
+        # dtype=str on the key columns is the fix for float/leading-zero drift.
+        df = pd.read_excel(path, dtype={c: str for c in key_cols})
+    except Exception as e:
+        raise ValueError(f"Failed to read {label} {path}: {e}")
+    missing = set(key_cols) - set(df.columns)
+    if missing:
+        raise ValueError(f"{label} {path} is missing required column(s): {sorted(missing)}")
+    return df
+
+
+def _cell(row, col):
+    v = row.get(col, "")
+    return "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v).strip()
+
+
+# ---------------------------------------------------------------------------
+# ML table
+# ---------------------------------------------------------------------------
+
+def load_ml_table(excel_path, on_duplicate="last"):
+    """Load ML table (Excel) with a comma-separated [Rule Marker] column.
+
     Expected columns: [Company Code], [Document Nr], [Supplier Nr], [Supplier name], [Rule Marker]
-    Creates transaction_id from company_code + document_nr.
-    Parses [Rule Marker] (comma-separated rule IDs) into {rule_id: bool}.
-    Returns {transaction_id: {"ml_decision": str, "ml_flags": {rule_id: bool}, "metadata": {...}}}.
-    """
-    if not os.path.isfile(excel_path):
-        raise ValueError(f"ML table not found: {excel_path}")
+    Returns (table, report):
+        table  = {transaction_id: {"ml_decision": str, "ml_flags": {rule_id: bool}, "metadata": {...}}}
+        report = LoadReport with row accounting
 
-    ground_truth = {}
-    try:
-        df = pd.read_excel(excel_path)
-    except Exception as e:
-        raise ValueError(f"Failed to read ML table {excel_path}: {e}")
-    
-    required_cols = {"[Company Code]", "[Document Nr]", "[Rule Marker]"}
-    missing_cols = required_cols - set(df.columns)
-    if missing_cols:
-        raise ValueError(
-            f"ML table {excel_path} is missing required column(s): {sorted(missing_cols)}"
-        )
-    
+    on_duplicate: what to keep when the same transaction_id appears more than once
+        "last"  -> keep the last row (previous behaviour, now counted instead of silent)
+        "first" -> keep the first row
+        "union" -> OR the rule flags across all rows for that key (a document
+                   with several rule-hit rows becomes one record with all its rules)
+        "error" -> raise
+    """
+    df = _read_excel_text_keys(excel_path, ["[Company Code]", "[Document Nr]"], "ML table")
+    if "[Rule Marker]" not in df.columns:
+        raise ValueError(f"ML table {excel_path} is missing required column(s): ['[Rule Marker]']")
+
+    table, report = {}, LoadReport(path=excel_path, n_raw=len(df))
+
     for idx, row in df.iterrows():
-        company_code = str(row.get("[Company Code]", "")).strip()
-        doc_nr = str(row.get("[Document Nr]", "")).strip()
-        rule_marker = str(row.get("[Rule Marker]", "")).strip()
-        
-        if not company_code or not doc_nr:
-            raise ValueError(f"ML table {excel_path}, row {idx + 2}: empty company_code or doc_nr")
-        
-        # Create transaction_id from company_code + document_nr
-        transaction_id = f"{company_code}_{doc_nr}"
-        
-        # Parse comma-separated rule marker into {rule_id: bool}
-        triggered_rules = {r.strip() for r in rule_marker.split(",") if r.strip()}
-        flags = {rule_id: rule_id in triggered_rules for rule_id in RULE_FLAGS}
-        
-        ground_truth[transaction_id] = {
-            "ml_decision": "High",  # Default; adjust if your data has explicit decision column
-            "ml_flags": flags,
+        transaction_id = make_transaction_id(row.get("[Company Code]"), row.get("[Document Nr]"))
+        if transaction_id is None:
+            report.n_blank_key += 1
+            if len(report.blank_rows) < 10:
+                report.blank_rows.append(idx + 2)
+            continue
+
+        triggered = {r.strip().upper() for r in _cell(row, "[Rule Marker]").split(",") if r.strip()}
+        unknown = triggered - set(RULE_FLAGS)
+        if unknown:
+            raise ValueError(
+                f"ML table {excel_path}, row {idx + 2}: unknown rule id(s) {sorted(unknown)} "
+                f"in [Rule Marker] -- not in fraud_eval.rules.RULE_FLAGS"
+            )
+        entry = {
+            "ml_decision": "High",
+            "ml_flags": {rid: rid in triggered for rid in RULE_FLAGS},
             "metadata": {
-                "company_code": company_code,
-                "document_nr": doc_nr,
-                "supplier_nr": str(row.get("[Supplier Nr]", "")).strip(),
-                "supplier_name": str(row.get("[Supplier name]", "")).strip(),
-            }
+                "company_code": normalize_company_code(row.get("[Company Code]")),
+                "document_nr": normalize_key(row.get("[Document Nr]")),
+                "supplier_nr": _cell(row, "[Supplier Nr]"),
+                "supplier_name": _cell(row, "[Supplier name]"),
+                "source_row": idx + 2,
+            },
         }
+        _insert(table, report, transaction_id, entry, "ml_flags", on_duplicate, excel_path, idx + 2)
 
-    if not ground_truth:
-        raise ValueError(f"ML table {excel_path} has a header but no data rows")
-    return ground_truth
+    report.n_kept = len(table)
+    if not table:
+        raise ValueError(f"ML table {excel_path} has a header but no usable data rows")
+    return table, report
 
 
-def load_AI_table(excel_path):
+# ---------------------------------------------------------------------------
+# AI table
+# ---------------------------------------------------------------------------
+
+def load_AI_table(excel_path, on_duplicate="last"):
     """Load AI table (Excel) with binary rule columns (R01-R27).
-    
-    Expected columns: COMPANY_CODE, DOCUMENT_NR, SUPPLIER_NR, COMPANY_NAME, R01, R02, ..., R27
-    Creates transaction_id from COMPANY_CODE + DOCUMENT_NR.
-    Extracts R01-R27 as {rule_id: bool}.
-    Returns {transaction_id: {"report_text": str, "ai_flags": {rule_id: bool}, "metadata": {...}}}.
-    """
-    if not os.path.isfile(excel_path):
-        raise ValueError(f"AI table not found: {excel_path}")
 
-    reports = {}
-    try:
-        df = pd.read_excel(excel_path)
-    except Exception as e:
-        raise ValueError(f"Failed to read AI table {excel_path}: {e}")
-    
-    required_cols = {"COMPANY_CODE", "DOCUMENT_NR"}
-    missing_cols = required_cols - set(df.columns)
-    if missing_cols:
+    Expected columns: COMPANY_CODE, DOCUMENT_NR, SUPPLIER_NR, COMPANY_NAME, R01, ..., R27
+    Returns (table, report):
+        table  = {transaction_id: {"report_text": str, "ai_flags": {rule_id: bool}, "metadata": {...}}}
+        report = LoadReport with row accounting
+    on_duplicate: see load_ml_table.
+    """
+    df = _read_excel_text_keys(excel_path, ["COMPANY_CODE", "DOCUMENT_NR"], "AI table")
+
+    rule_cols = [rid for rid in RULE_FLAGS if rid in df.columns]
+    if not rule_cols:
         raise ValueError(
-            f"AI table {excel_path} is missing required column(s): {sorted(missing_cols)}"
+            f"AI table {excel_path} has no recognized rule columns "
+            f"(expected some of {sorted(RULE_FLAGS)}); found {list(df.columns)}"
         )
-    
+
+    table, report = {}, LoadReport(path=excel_path, n_raw=len(df))
+
     for idx, row in df.iterrows():
-        company_code = str(row.get("COMPANY_CODE", "")).strip()
-        doc_nr = str(row.get("DOCUMENT_NR", "")).strip()
-        
-        if not company_code or not doc_nr:
-            raise ValueError(f"AI table {excel_path}, row {idx + 2}: empty COMPANY_CODE or DOCUMENT_NR")
-        
-        # Create transaction_id from COMPANY_CODE + DOCUMENT_NR
-        transaction_id = f"{company_code}_{doc_nr}"
-        
-        # Extract R01-R27 as {rule_id: bool}
+        transaction_id = make_transaction_id(row.get("COMPANY_CODE"), row.get("DOCUMENT_NR"))
+        if transaction_id is None:
+            report.n_blank_key += 1
+            if len(report.blank_rows) < 10:
+                report.blank_rows.append(idx + 2)
+            continue
+
         flags = {
-            rule_id: str(row.get(rule_id, "")).strip().lower() in ("true", "1", "yes")
-            for rule_id in RULE_FLAGS
+            rid: _cell(row, rid).lower() in ("true", "1", "1.0", "yes", "y", "t")
+            for rid in rule_cols
         }
-        
-        # Concatenate report-like text from available fields
-        report_text = f"Company: {company_code}, Doc: {doc_nr}, Supplier: {row.get('COMPANY_NAME', '')}"
-        
-        reports[transaction_id] = {
-            "report_text": report_text,
+        entry = {
+            "report_text": (f"Company: {normalize_company_code(row.get('COMPANY_CODE'))}, "
+                            f"Doc: {normalize_key(row.get('DOCUMENT_NR'))}, "
+                            f"Supplier: {_cell(row, 'COMPANY_NAME')}"),
             "ai_flags": flags,
             "metadata": {
-                "company_code": company_code,
-                "document_nr": doc_nr,
-                "supplier_nr": str(row.get("SUPPLIER_NR", "")).strip(),
-                "supplier_name": str(row.get("COMPANY_NAME", "")).strip(),
-            }
+                "company_code": normalize_company_code(row.get("COMPANY_CODE")),
+                "document_nr": normalize_key(row.get("DOCUMENT_NR")),
+                "supplier_nr": _cell(row, "SUPPLIER_NR"),
+                "supplier_name": _cell(row, "COMPANY_NAME"),
+                "source_row": idx + 2,
+            },
         }
+        _insert(table, report, transaction_id, entry, "ai_flags", on_duplicate, excel_path, idx + 2)
 
-    if not reports:
-        raise ValueError(f"AI table {excel_path} has a header but no data rows")
-    return reports
+    report.n_kept = len(table)
+    if not table:
+        raise ValueError(f"AI table {excel_path} has a header but no usable data rows")
+    return table, report
+
+
+# ---------------------------------------------------------------------------
+# Duplicate policy (shared)
+# ---------------------------------------------------------------------------
+
+def _insert(table, report, key, entry, flags_field, on_duplicate, path, row_num):
+    if key not in table:
+        table[key] = entry
+        return
+
+    report.n_duplicate_rows += 1
+    report.duplicates.setdefault(key, []).append(entry)
+
+    if on_duplicate == "error":
+        raise ValueError(f"{path}, row {row_num}: duplicate transaction_id {key!r}")
+    elif on_duplicate == "first":
+        return
+    elif on_duplicate == "last":
+        table[key] = entry
+    elif on_duplicate == "union":
+        merged = table[key]
+        merged[flags_field] = {
+            rid: merged[flags_field].get(rid, False) or entry[flags_field].get(rid, False)
+            for rid in set(merged[flags_field]) | set(entry[flags_field])
+        }
+    else:
+        raise ValueError(f"on_duplicate must be one of last/first/union/error, got {on_duplicate!r}")

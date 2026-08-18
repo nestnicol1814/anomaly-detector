@@ -29,6 +29,10 @@ class EvalResults:
     aggregate: dict
     unmatched_ids: set
     transactions: dict = field(default=None)
+    ml_report: object = field(default=None)   # LoadReport: ML file row accounting
+    ai_report: object = field(default=None)   # LoadReport: AI file row accounting
+    ml_only_ids: set = field(default_factory=set)
+    ai_only_ids: set = field(default_factory=set)
 
     def to_csv(self, path):
         if not self.per_case:
@@ -45,12 +49,16 @@ class AnomalyEval:
     normalizes both to the same internal format, merges on company_code+document_nr,
     and scores the agreement."""
 
-    def run(self, ai_csv, ml_csv, transactions_csv=None):
-        ml_table = load_ml_table(ml_csv)
-        ai_table = load_AI_table(ai_csv)
+    def run(self, ai_csv, ml_csv, transactions_csv=None, on_duplicate="last"):
+        """on_duplicate: how loaders treat repeated transaction_ids within one
+        file -- "last" (default), "first", "union" (OR the rule flags), "error"."""
+        ml_table, ml_report = load_ml_table(ml_csv, on_duplicate=on_duplicate)
+        ai_table, ai_report = load_AI_table(ai_csv, on_duplicate=on_duplicate)
         transactions = self._load_transactions(transactions_csv) if transactions_csv else None
 
-        unmatched_ids = set(ai_table) ^ set(ml_table)
+        ml_only_ids = set(ml_table) - set(ai_table)
+        ai_only_ids = set(ai_table) - set(ml_table)
+        unmatched_ids = ml_only_ids | ai_only_ids
         matched_ids = sorted(set(ai_table) & set(ml_table))
 
         per_case = []
@@ -70,6 +78,10 @@ class AnomalyEval:
             aggregate=aggregate(per_case),
             unmatched_ids=unmatched_ids,
             transactions=transactions,
+            ml_report=ml_report,
+            ai_report=ai_report,
+            ml_only_ids=ml_only_ids,
+            ai_only_ids=ai_only_ids,
         )
 
     @staticmethod
@@ -81,11 +93,36 @@ class AnomalyEval:
             return {row["transaction_id"]: row for row in csv.DictReader(f)}
 
     @staticmethod
-    def print_summary(results):
-        if results.unmatched_ids:
-            print(f"WARNING: no ground-truth/report pair for: {sorted(results.unmatched_ids)}")
+    def print_row_accounting(results):
+        """Where every row went, from raw Excel to scored case. Printed first so
+        row loss is never invisible."""
+        print("=" * 110)
+        print("ROW ACCOUNTING")
+        print("=" * 110)
+        for label, rep in (("ML", results.ml_report), ("AI", results.ai_report)):
+            if rep is None:
+                continue
+            print(f"{label}: {rep.summary()}")
+            if rep.blank_rows:
+                print(f"    blank-key example rows (Excel row numbers): {rep.blank_rows}")
+            if rep.duplicates:
+                worst = sorted(rep.duplicates.items(), key=lambda kv: -len(kv[1]))[:5]
+                print(f"    {len(rep.duplicates)} keys had duplicates; most repeated: "
+                      + ", ".join(f"{k!r} x{len(v) + 1}" for k, v in worst))
+        n_matched = len(results.per_case)
+        print(f"MERGE: {n_matched} transaction_ids present in BOTH files and scored")
+        print(f"       {len(results.ml_only_ids)} only in ML   |   {len(results.ai_only_ids)} only in AI")
+        if results.ml_only_ids:
+            print(f"       ML-only examples: {sorted(results.ml_only_ids)[:5]}")
+        if results.ai_only_ids:
+            print(f"       AI-only examples: {sorted(results.ai_only_ids)[:5]}")
+        print()
 
-        print(f"\nScored {results.aggregate['n_scored']} of {results.aggregate['n_total']} transactions\n")
+    @staticmethod
+    def print_summary(results):
+        AnomalyEval.print_row_accounting(results)
+
+        print(f"Scored {results.aggregate['n_scored']} of {results.aggregate['n_total']} transactions\n")
 
         print(f"{'ID':<20}{'TP':<3}{'FP':<3}{'FN':<3}{'Prec':<6}{'Rec':<6}{'F1':<6}{'Hallucinated':<20}{'Missed':<20}")
         print("-" * 110)
