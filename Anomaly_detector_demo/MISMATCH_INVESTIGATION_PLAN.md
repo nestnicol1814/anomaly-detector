@@ -14,6 +14,7 @@ Inputs that already exist:
 | per-rule frequency counts | `isolate_mismatches.py` console output | rule × direction |
 | Report Case Extract.xlsx (ML) | ML system export | raw ML rows incl. [Entry Date], [Supplier Nr], [G/L Account], ... |
 | ADCMS Case Rules 2026 Export.xlsx (AI) | AI system export | raw AI rows incl. SUPPLIER_COUNTRY, ENTRY_DATE, POSTING_DATE, ... |
+| **Base transaction dataset** (large) | source system | one row per transaction, ALL raw fields — **the referee**: rule recomputation uses THIS, not the exports |
 
 ---
 
@@ -22,21 +23,28 @@ Inputs that already exist:
 1. Stack `hallucinated_rules.csv` (+ column `direction="hallucinated"`) and
    `missed_rules.csv` (+ `direction="missed"`) into ONE table at **(case, rule, direction)**
    grain (~2,100 rows). Keep this grain all the way through — do not collapse to case level.
-2. Inner-join the raw source columns onto it by `transaction_id`:
-   - from the **AI export**: prefix columns `ai_` (this file carries most raw fields:
-     SUPPLIER_COUNTRY, ENTRY_DATE, POSTING_DATE, DOCUMENT_TYPE, SUPPLIER_NR, ...)
-   - from the **ML export**: prefix columns `ml_` ([Entry Date], [Supplier Nr],
-     [G/L Account], [Document Date], [Value Custom], ...)
-   - **[REC-1] Join BOTH files, not one "main database".** Each export carries fields the
-     other lacks; the verifier needs the union. Prefixes prevent column collisions and
-     make it explicit which system supplied each value.
+2. LEFT-join raw source columns onto it by `transaction_id`, from three sources:
+   - **[REC-1] from the BASE transaction dataset: prefix `base_` — this is the referee.**
+     The verifier recomputes rules from `base_*` fields ONLY. Because the file is huge:
+     read only the columns the rule specs need (`usecols`), filter to the trouble-case
+     transaction_ids immediately (chunked read if necessary), THEN join — the working
+     table stays ~2,100 rows regardless of base size.
+   - from the **AI export**: prefix `ai_` — evidence of what the AI system SAW
+     (SUPPLIER_COUNTRY, ENTRY_DATE, POSTING_DATE, DOCUMENT_TYPE, SUPPLIER_NR, ...)
+   - from the **ML export**: prefix `ml_` — evidence of what the ML system SAW
+     ([Entry Date], [Supplier Nr], [G/L Account], [Document Date], [Value Custom], ...)
+   - Verdicts come from `base_*`. The `ai_*`/`ml_*` copies exist to explain wrongness:
+     if `base_` says vendor created 12 days before entry but the `ai_` copy of that
+     field is blank or different, the CAUSE is stale/missing input data — record the
+     discrepancy (`cause_category: stale_master_data` / `missing_field`).
    - **[REC-2] Build the join key with `fraud_eval.loaders.make_transaction_id`** (same
-     normalization: company code + zero-stripped doc nr). Rebuilding the key ad hoc in
-     pandas is exactly how rows silently vanished before. After the join, assert
-     row count is unchanged and report any (case, rule) rows that failed to find
-     source data — those become verdict `SOURCE_ROW_MISSING`, not silent drops.
-3. Output: `trouble_cases_enriched.csv` — one row per (case, rule, direction) with all
-   `ai_*` / `ml_*` raw fields attached.
+     normalization: company code + zero-stripped doc nr) — for the base dataset too;
+     confirm which base columns form the key. Rebuilding the key ad hoc in pandas is
+     exactly how rows silently vanished before. Use LEFT joins (never inner): after the
+     join, assert (case, rule, direction) row count is unchanged, and rows that found no
+     base row get verdict `SOURCE_ROW_MISSING`, not silent drops.
+3. Output: `trouble_cases_enriched.csv` — one row per (case, rule, direction) with
+   `base_*` / `ai_*` / `ml_*` raw fields attached.
 
 ## Step 2 — Rule specification registry (`fraud_eval/rule_specs.py`)
 
@@ -58,11 +66,12 @@ RULE_SPECS = {
 ```
 
 - **[REC-3] The real work in this step is the FIELD MAPPING, not the formulas.** Specs
-  reference logical fields (`entry_date`); the exports have their own names
-  (`ai_ENTRY_DATE`, `ml_[Entry Date]`). Maintain one explicit mapping dict
-  `LOGICAL_FIELD -> [preferred column, fallback column]`, validated at startup
-  (fail loudly if a mapped column doesn't exist). When ML and AI disagree on the
-  same logical field's value, record BOTH — that discrepancy is itself a finding.
+  reference logical fields (`entry_date`); the sources have their own names
+  (`base_...`, `ai_ENTRY_DATE`, `ml_[Entry Date]`). Maintain one explicit mapping dict
+  `LOGICAL_FIELD -> {verdict: base_ column, ai_saw: ai_ column, ml_saw: ml_ column}`,
+  validated at startup (fail loudly if a mapped column doesn't exist). Verdict
+  computation reads the `base_` column only; the `ai_saw`/`ml_saw` columns are compared
+  against it to detect stale/missing input — that discrepancy is itself a finding.
 - **[REC-4] Classify every rule upfront** as `computable` / `uncomputable`
   (R05 two-month lookback, R06 cumulative ≥500K unless the extract has cumulative
   fields) so nobody expects verdicts the data cannot support. The uncomputable
