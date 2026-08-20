@@ -4,6 +4,19 @@ Goal: for every (case, rule) disagreement between ML and AI, determine **who was
 recomputing the rule from source data, then have an AI agent explain **why** the wrong side
 got it wrong — per-rule, at an aggregate level, with case-level evidence attached.
 
+Scope guarantee: everything below operates ONLY on the 10,386 cases matched by
+AnomalyEval's merge. The trouble lists are derived from per_case_results.csv, which
+contains matched cases only — unmatched (ML-only / AI-only) rows cannot enter the
+investigation.
+
+Verification scope (broader than disagreements alone): the deterministic verifier
+checks EVERY (case, rule) pair where EITHER system flagged the rule — including the
+pairs where both agreed. Agreement is not correctness: both systems can be wrong
+together, and checking agreements is free once the rule computations exist. This adds
+a fourth outcome class, `BOTH_WRONG_TOGETHER`, and the aggregate metric "how often do
+ML and AI err jointly". The AI investigation stage (step 4) still works only the
+disagreement clusters.
+
 Inputs that already exist:
 
 | artifact | produced by | grain |
@@ -20,9 +33,11 @@ Inputs that already exist:
 
 ## Step 1 — Build the trouble-case working table (`build_trouble_table.py`)
 
-1. Stack `hallucinated_rules.csv` (+ column `direction="hallucinated"`) and
-   `missed_rules.csv` (+ `direction="missed"`) into ONE table at **(case, rule, direction)**
-   grain (~2,100 rows). Keep this grain all the way through — do not collapse to case level.
+1. Build the flagged-pair table at **(case, rule, direction)** grain:
+   - `hallucinated_rules.csv` rows -> `direction="hallucinated"` (AI yes, ML no)
+   - `missed_rules.csv` rows -> `direction="missed"` (ML yes, AI no)
+   - agreed pairs (both flagged; from the merged AnomalyEval flags) -> `direction="agreed"`
+   Keep this grain all the way through — do not collapse to case level.
 2. LEFT-join raw source columns onto it by `transaction_id`, from three sources:
    - **[REC-1] from the BASE transaction dataset: prefix `base_` — this is the referee.**
      The verifier recomputes rules from `base_*` fields ONLY. Because the file is huge:
@@ -92,6 +107,8 @@ For each row of `trouble_cases_enriched.csv`:
 | missed | no | `AI_CORRECT` — ML flag was wrong/stale |
 | hallucinated (AI yes, ML no) | yes | `AI_CORRECT` — AI found a real trigger ML lacked |
 | hallucinated | no | `ML_CORRECT` — AI hallucinated |
+| agreed (both yes) | yes | `BOTH_CORRECT` — confirmed true positive |
+| agreed | no | `BOTH_WRONG_TOGETHER` — joint error; neither system caught it |
 
 4. Outputs:
    - `verdicts.csv` — (case, rule, direction, verdict, computed_value, fields_used,
