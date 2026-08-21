@@ -30,6 +30,11 @@ def load(path, cc, doc):
 
 
 def main():
+    if len(sys.argv) != 3:
+        print("usage: python diagnose_overlap.py <ML extract.xlsx> <AI export.xlsx>")
+        print('  quote each path if it contains spaces, e.g.')
+        print('  python diagnose_overlap.py "C:\\...\\Report Case Extract.xlsx" "C:\\...\\ADCMS Export.xlsx"')
+        sys.exit(1)
     ml_path, ai_path = sys.argv[1], sys.argv[2]
     ml = load(ml_path, ML_CC, ML_DOC)
     ai = load(ai_path, AI_CC, AI_DOC)
