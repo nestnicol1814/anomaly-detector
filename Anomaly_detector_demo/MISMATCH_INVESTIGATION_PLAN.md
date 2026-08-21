@@ -1,3 +1,30 @@
+# AI Verification Plan (Revision 3 — current)
+
+**Rev 3 decision (supersedes Rev 2's verify-everything design):** ML is the accepted,
+highly accurate incumbent control, so **the ML comparison counts ARE the quantified
+findings** ("AI deviates from ML N times on rule X") — no rule recomputation needed
+for the headline numbers. The investigation workflow is:
+
+1. `isolate_mismatches.py` → per-rule deviation counts + `adcms_lookup_samples.txt`
+   (5 worst cases per rule, hallucinated and missed as separate sections).
+2. Pull those sampled cases' generated reports from ADCMS (manual or export).
+3. AI investigator compares each sampled report against the base-data row and forms
+   ONE hypothesis per (rule × direction) cluster — separate conclusions for
+   hallucinated vs missed, never merged.
+4. Built-in assumption check, free of charge: each sampled comparison also confirms
+   whether ML was right on that case. 5/5 confirm → cluster finding stands.
+   If sampling shows ML itself was wrong → escalate ONLY that rule to the
+   deterministic verifier below to get corrected counts.
+
+The verifier (rule_specs.py / verifier.py / verify_ai.py, built and fixture-tested)
+is **demoted to an on-demand tool** — invoked per rule only when sampling contradicts
+the ML-is-right assumption, or if a finding later needs recomputed counts for
+governance. It is not part of the standard workflow.
+
+---
+
+The Rev 2 design below is retained as reference for that on-demand path.
+
 # AI Verification Plan — AI vs Base Data (Revision 2)
 
 **Revision note:** Revision 1 framed verification as "ML vs AI: who was right per
