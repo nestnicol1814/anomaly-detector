@@ -112,6 +112,24 @@ to "infer" — missing data cannot be inferred, only reported.
 5. Real run -> scorecard -> hand-check validation
 6. Investigation packets for what the scorecard can't explain
 
+## Pending inputs from the user (do not guess these)
+
+1. **Official rule specifications** — for each rule to be checked: which base columns
+   it uses and the exact condition/threshold. These OVERRIDE the current
+   `rule_specs.py` predicates, which were transcribed from the ICCC system prompt and
+   carry two CONFIRM markers (R01/R02 date-field swap; R17 ratio definition). When the
+   list arrives, each spec is updated to match it verbatim and the fixture test is
+   extended accordingly.
+2. **Rule shortlist** — the subset of rules actually worth verifying (not all rules
+   were problematic). Implementation: a `RULES_TO_CHECK = [...]` list at the top of
+   `verify_ai.py`; the engine already accepts a filtered rules dict
+   (`verify(..., rules={r: RULE_SPECS[r] for r in RULES_TO_CHECK})`), so non-listed
+   rules are simply never computed — no spec or FIELD_MAP entry needed for them,
+   and validate_mapping() only enforces columns for the shortlisted rules.
+
+Until both lists arrive, `rule_specs.py` stands as a complete draft; no further
+coding on specs.
+
 ## Open questions (answered by the base file's header row)
 
 - Base key columns for company code / document number, and grain (document vs line
