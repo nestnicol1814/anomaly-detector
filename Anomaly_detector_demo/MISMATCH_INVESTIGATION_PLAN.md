@@ -1,175 +1,120 @@
-# Mismatch Investigation Plan
+# AI Verification Plan — AI vs Base Data (Revision 2)
 
-Goal: for every (case, rule) disagreement between ML and AI, determine **who was right** by
-recomputing the rule from source data, then have an AI agent explain **why** the wrong side
-got it wrong — per-rule, at an aggregate level, with case-level evidence attached.
+**Revision note:** Revision 1 framed verification as "ML vs AI: who was right per
+disagreement." Rev 2 pivots per project direction: the AI system will eventually
+replace ML, so the AI is verified **directly against the base transaction data**
+(ground truth). ML is no longer required for verification — it becomes an optional
+cross-reference. The ML-vs-AI comparison pipeline (`fraud_eval`, `isolate_mismatches`)
+stays as-is for the agreement statistics; this plan covers correctness.
 
-Scope guarantee: everything below operates ONLY on the 10,386 cases matched by
-AnomalyEval's merge. The trouble lists are derived from per_case_results.csv, which
-contains matched cases only — unmatched (ML-only / AI-only) rows cannot enter the
-investigation.
+## Core idea
 
-Verification scope (broader than disagreements alone): the deterministic verifier
-checks EVERY (case, rule) pair where EITHER system flagged the rule — including the
-pairs where both agreed. Agreement is not correctness: both systems can be wrong
-together, and checking agreements is free once the rule computations exist. This adds
-a fourth outcome class, `BOTH_WRONG_TOGETHER`, and the aggregate metric "how often do
-ML and AI err jointly". The AI investigation stage (step 4) still works only the
-disagreement clusters.
+For every case, recompute every computable rule from raw base-data fields.
+That computed flag vector IS the ground truth. Compare the AI's flag vector
+against it:
 
-Inputs that already exist:
-
-| artifact | produced by | grain |
+| AI flag | base computation | outcome |
 |---|---|---|
-| `per_case_results.csv` | `test.py` | one row per matched case (10,386) |
-| `hallucinated_rules.csv` | `isolate_mismatches.py` | one row per (case, rule) the AI claimed and ML didn't |
-| `missed_rules.csv` | `isolate_mismatches.py` | one row per (case, rule) ML flagged and the AI didn't |
-| per-rule frequency counts | `isolate_mismatches.py` console output | rule × direction |
-| Report Case Extract.xlsx (ML) | ML system export | raw ML rows incl. [Entry Date], [Supplier Nr], [G/L Account], ... |
-| ADCMS Case Rules 2026 Export.xlsx (AI) | AI system export | raw AI rows incl. SUPPLIER_COUNTRY, ENTRY_DATE, POSTING_DATE, ... |
-| **Base transaction dataset** (large) | source system | one row per transaction, ALL raw fields — **the referee**: rule recomputation uses THIS, not the exports |
+| triggered | condition met | `TRUE_POSITIVE` — AI correct |
+| triggered | condition not met | `FALSE_POSITIVE` — AI hallucinated |
+| not triggered | condition met | `FALSE_NEGATIVE` — AI missed |
+| not triggered | condition not met | `TRUE_NEGATIVE` — AI correct |
+| any | required base fields blank | `DATA_MISSING` (fields listed) |
+| any | rule not computable from extract | `UNCOMPUTABLE` |
 
----
+Consequences of this design (vs Rev 1):
+- Rules must be computed on **all cases**, not only flagged ones — false negatives
+  are invisible otherwise.
+- The evaluation population is **every AI-export case with base-data coverage**
+  (~59k), no longer capped by the 10,386 ML∩AI intersection.
+- The evaluation survives ML's retirement unchanged.
 
-## Step 1 — Build the trouble-case working table (`build_trouble_table.py`)
+## Files to build
 
-1. Build the flagged-pair table at **(case, rule, direction)** grain:
-   - `hallucinated_rules.csv` rows -> `direction="hallucinated"` (AI yes, ML no)
-   - `missed_rules.csv` rows -> `direction="missed"` (ML yes, AI no)
-   - agreed pairs (both flagged; from the merged AnomalyEval flags) -> `direction="agreed"`
-   Keep this grain all the way through — do not collapse to case level.
-2. LEFT-join raw source columns onto it by `transaction_id`, from three sources:
-   - **[REC-1] from the BASE transaction dataset: prefix `base_` — this is the referee.**
-     The verifier recomputes rules from `base_*` fields ONLY. Because the file is huge:
-     read only the columns the rule specs need (`usecols`), filter to the trouble-case
-     transaction_ids immediately (chunked read if necessary), THEN join — the working
-     table stays ~2,100 rows regardless of base size.
-   - from the **AI export**: prefix `ai_` — evidence of what the AI system SAW
-     (SUPPLIER_COUNTRY, ENTRY_DATE, POSTING_DATE, DOCUMENT_TYPE, SUPPLIER_NR, ...)
-   - from the **ML export**: prefix `ml_` — evidence of what the ML system SAW
-     ([Entry Date], [Supplier Nr], [G/L Account], [Document Date], [Value Custom], ...)
-   - Verdicts come from `base_*`. The `ai_*`/`ml_*` copies exist to explain wrongness:
-     if `base_` says vendor created 12 days before entry but the `ai_` copy of that
-     field is blank or different, the CAUSE is stale/missing input data — record the
-     discrepancy (`cause_category: stale_master_data` / `missing_field`).
-   - **[REC-2] Build the join key with `fraud_eval.loaders.make_transaction_id`** (same
-     normalization: company code + zero-stripped doc nr) — for the base dataset too;
-     confirm which base columns form the key. Rebuilding the key ad hoc in pandas is
-     exactly how rows silently vanished before. Use LEFT joins (never inner): after the
-     join, assert (case, rule, direction) row count is unchanged, and rows that found no
-     base row get verdict `SOURCE_ROW_MISSING`, not silent drops.
-3. Output: `trouble_cases_enriched.csv` — one row per (case, rule, direction) with
-   `base_*` / `ai_*` / `ml_*` raw fields attached.
-
-## Step 2 — Rule specification registry (`fraud_eval/rule_specs.py`)
-
-One spec per rule, encoded as data + a small compute function, mirroring the ICCC
-system prompt's "COMPUTED FIELDS AND RULE LOGIC" section:
+### 1. `fraud_eval/rule_specs.py` — every rule as data
 
 ```python
-RULE_SPECS = {
-  "R03": {
-    "name": "Less than 30 days between vendor creation and Non-PO",
-    "requires": ["entry_date", "vendor_create_date"],
-    "compute": lambda f: (f["entry_date"] - f["vendor_create_date"]).days < 30,
-    "computable": True,
-  },
-  "R05": { "name": "...", "computable": False,   # needs 2-month history not in extracts
-           "reason_uncomputable": "requires prior Non-PO lookback" },
-  ...
-}
+@dataclass
+class RuleSpec:
+    rule_id: str
+    name: str
+    requires: list        # logical field names
+    predicate: callable   # dict of typed values -> bool
+    computable: bool = True
+    reason_uncomputable: str = ""
 ```
 
-- **[REC-3] The real work in this step is the FIELD MAPPING, not the formulas.** Specs
-  reference logical fields (`entry_date`); the sources have their own names
-  (`base_...`, `ai_ENTRY_DATE`, `ml_[Entry Date]`). Maintain one explicit mapping dict
-  `LOGICAL_FIELD -> {verdict: base_ column, ai_saw: ai_ column, ml_saw: ml_ column}`,
-  validated at startup (fail loudly if a mapped column doesn't exist). Verdict
-  computation reads the `base_` column only; the `ai_saw`/`ml_saw` columns are compared
-  against it to detect stale/missing input — that discrepancy is itself a finding.
-- **[REC-4] Classify every rule upfront** as `computable` / `uncomputable`
-  (R05 two-month lookback, R06 cumulative ≥500K unless the extract has cumulative
-  fields) so nobody expects verdicts the data cannot support. The uncomputable
-  list goes straight to the AI investigation queue.
+- All rules R01–R27 encoded from the ICCC prompt's "COMPUTED FIELDS AND RULE LOGIC"
+  section (R01/R02 weekday checks; R03/R04/R27 date arithmetic; R06/R07/R08 value
+  thresholds; R09 name prefix; R13–R16 geography comparisons; R17 name-match ratio).
+- History-dependent rules (R05 two-month lookback; R06 cumulative if the base extract
+  lacks cumulative fields) declared `computable=False` with the reason — unless the
+  base data turns out to contain the needed history, in which case they get predicates
+  too.
+- `FIELD_MAP`: logical field -> base-data column name + type (`date`/`number`/`string`/
+  `bool`). **Base column names are TODO placeholders** until the real header row is
+  known; `validate_mapping(df)` runs at startup and fails loudly on any missing column.
+- One shared `resolve_fields(row, spec)` does all parsing/typing centrally
+  (`pd.to_datetime(errors="coerce")` etc.); predicates never parse. Blank/unparseable
+  required fields short-circuit to `DATA_MISSING` before the predicate runs.
 
-## Step 3 — Deterministic verifier (`verify_rules.py`) — NO LLM
+### 2. `verify_ai.py` — the verdict engine
 
-For each row of `trouble_cases_enriched.csv`:
+```python
+BASE_PATH = r"TODO"        # base transaction dataset -- user uploads later
+AI_PATH   = r"TODO"        # ADCMS export (current one)
+```
 
-1. Look up the rule spec. If `computable == False` → verdict `UNCOMPUTABLE`.
-2. Resolve required fields via the mapping. Any missing/blank → verdict `DATA_MISSING`,
-   recording which fields were blank (this is a root cause, not a failure of the script).
-3. Otherwise compute the condition and combine with `direction`:
+1. Load AI export via `fraud_eval.loaders.load_AI_table` (flags + ids, existing code).
+2. Load base data: `usecols` = only columns FIELD_MAP needs + key columns; chunked
+   read if large; build `transaction_id` with `make_transaction_id` (same
+   normalization as everywhere else — key columns in base are a TODO to confirm).
+3. LEFT-join AI cases to base rows; count and report AI cases with no base row
+   (`NO_BASE_DATA` — excluded from scoring, never silently dropped; assert row
+   count unchanged, which also catches duplicate base keys multiplying rows).
+4. For each case × each rule: resolve fields -> compute -> outcome per the table
+   above. Plain loop or per-rule vectorization; either is fast enough.
+5. Outputs:
+   - `ai_verdicts.csv` — (case, rule, ai_flag, base_condition, outcome, evidence,
+     blank_fields) — **only rows where outcome is FP / FN / DATA_MISSING** (TP/TN
+     kept as counts only, otherwise the file is 59k × 15 rows of mostly agreement)
+   - `ai_rule_scorecard.csv` — per rule: TP / FP / FN / TN / DATA_MISSING /
+     UNCOMPUTABLE counts, precision, recall, F1 — **the headline deliverable: the
+     AI's true per-rule accuracy against source data, independent of ML**
+   - console summary sorted by FP+FN descending
 
-| direction | condition met? | verdict |
-|---|---|---|
-| missed (ML yes, AI no) | yes | `ML_CORRECT` — AI truly missed it |
-| missed | no | `AI_CORRECT` — ML flag was wrong/stale |
-| hallucinated (AI yes, ML no) | yes | `AI_CORRECT` — AI found a real trigger ML lacked |
-| hallucinated | no | `ML_CORRECT` — AI hallucinated |
-| agreed (both yes) | yes | `BOTH_CORRECT` — confirmed true positive |
-| agreed | no | `BOTH_WRONG_TOGETHER` — joint error; neither system caught it |
+### 3. Validation before trusting it
 
-4. Outputs:
-   - `verdicts.csv` — (case, rule, direction, verdict, computed_value, fields_used,
-     blank_fields) — the full audit trail
-   - `verdict_summary.csv` — cross-tab rule × direction × verdict with counts —
-     **this table alone is the first aggregate deliverable** ("R14 misses: 92%
-     DATA_MISSING on bank_zone") and decides how much AI investigation is even needed.
+- `make_verifier_fixtures.py`: tiny synthetic base + AI files planting one known case
+  per outcome class per rule family; run end-to-end, assert expected verdicts.
+- Hand-check ~5 real cases per top-error rule against the scorecard (the hand-check
+  the user planned anyway — now it validates the engine instead of replacing it).
+- Cross-reference sanity check: rules where ML flags exist should mostly agree with
+  the base computation; a rule where ML and the base computation disagree wholesale
+  means the FIELD_MAP points at the wrong column (ML is not ground truth, but it is
+  a good smoke alarm).
 
-## Step 4 — AI investigation (Copilot agent, `audit_agent_prompt.md`)
+### 4. AI investigation stage (unchanged in spirit)
 
-Only for what Step 3 cannot close:
-
-- all `UNCOMPUTABLE` rows,
-- a **sample (~10) per (rule × direction × verdict) cluster** to establish the *cause*
-  narrative for the cluster,
-- the unexplained residual (verdicts that don't cluster).
-
-Mechanics:
-1. `make_packets.py` renders each selected row into the JSON input packet defined in
-   `audit_agent_prompt.md` (comparison stats + both systems' positions + raw fields +
-   rule definition). One JSONL file = the investigation queue, ordered biggest
-   cluster first.
-2. The Copilot agent (system prompt = `audit_agent_prompt.md`) processes packets and
-   its mandatory Part-2 JSON output is appended to `findings_log.jsonl` — one record
-   per investigation:
-   `{transaction_id, rule, direction, stage1_verdict, cause_category, cause_detail,
-     evidence[], confidence}`
-- **[REC-5] `cause_category` must be a controlled vocabulary** (`missing_field`,
-  `wrong_field_used`, `threshold_misread`, `stale_master_data`, `timing_difference`,
-  `ml_flag_error`, `unexplained`) — free text cannot be counted, categories can.
-- **[REC-6] The log is append-only.** Stateless agent + stateful log gives
-  resumability (skip already-investigated pairs on restart) and an audit trail the
-  synthesizer may read but never edit.
-- **[REC-7] ONE investigator agent, direction as a field** — not separate
-  hallucination/miss agents. Same procedure both directions; two prompts would drift
-  and split findings for cases appearing in both lists.
-
-## Step 5 — Synthesis (aggregate report)
-
-1. Pure-code aggregation first: `findings_log` + `verdict_summary` groupbys →
-   per-rule cause distribution with counts and example case ids.
-2. Synthesizer agent (or a single prompted run) turns that into the narrative report:
-   pattern-level findings ("R14 misses are systematic: AI input lacks bank_zone —
-   552/600 cases, verified on 10 samples"), each claim citing counted records.
-   The synthesizer reads the log; it never writes it.
+Clusters are now (rule × outcome × cause): all `UNCOMPUTABLE`, samples per big
+FP/FN cluster, the unexplained residual. Packets rendered per `audit_agent_prompt.md`;
+findings appended to `findings_log.jsonl` with the controlled `cause_category`
+vocabulary; synthesizer reads the log and the scorecard, writes the aggregate report.
+`DATA_MISSING` clusters are documented as data-quality findings, not sent to the AI
+to "infer" — missing data cannot be inferred, only reported.
 
 ## Order of construction
 
-1. `fraud_eval/rule_specs.py` (specs + field mapping) — gates everything
-2. `build_trouble_table.py` → `trouble_cases_enriched.csv`
-3. `verify_rules.py` → `verdicts.csv`, `verdict_summary.csv`  ← **stop and read this
-   before building any Copilot flow; it may already answer most of the "why"**
-4. `make_packets.py` → investigation queue JSONL
-5. Copilot investigator + `findings_log.jsonl`
-6. Synthesis report
+1. `rule_specs.py` with FIELD_MAP TODOs  ← buildable now
+2. `verify_ai.py` with BASE_PATH/AI_PATH TODOs  ← buildable now
+3. `make_verifier_fixtures.py` + green fixture run  ← buildable now
+4. User fills BASE_PATH, FIELD_MAP base columns, key columns  ← needs base header row
+5. Real run -> scorecard -> hand-check validation
+6. Investigation packets for what the scorecard can't explain
 
-## Verification
+## Open questions (answered by the base file's header row)
 
-- Step 1: assert (case,rule,direction) row count unchanged after join; zero silent drops.
-- Step 2: startup validation that every mapped column exists in the enriched table.
-- Step 3: hand-check ~5 verdicts per rule against the raw Excel rows before trusting
-  the cross-tab.
-- Step 4: spot-check that every `findings_log` record's `evidence` fields exist in the
-  packet it was given (no invented fields).
+- Base key columns for company code / document number, and grain (document vs line
+  item; if line-item, collapse rule TBD).
+- Whether base contains history/cumulative fields (decides if R05/R06 are computable).
+- Date column formats (decides resolver parsing).
