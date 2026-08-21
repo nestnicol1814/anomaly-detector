@@ -54,6 +54,43 @@ def explode_rules(cases, list_col, rule_col_name):
     return out.drop(columns=[list_col]).reset_index(drop=True)
 
 
+def write_adcms_samples(hallucinated_rules, missed_rules, out_dir, n=5):
+    """Per rule, up to n sample cases to look up directly in ADCMS -- one
+    section for hallucinated and one for missed, ALWAYS separate even for the
+    same rule, so each direction gets its own conclusion. Cases arrive
+    worst-first (inherited from the sorted cases tables), so the samples are
+    the worst offenders per rule."""
+    lines = []
+
+    def section(title, frame, rule_col):
+        lines.append("=" * 72)
+        lines.append(title)
+        lines.append("=" * 72)
+        if frame.empty:
+            lines.append("(none)")
+            lines.append("")
+            return
+        totals = frame[rule_col].value_counts()
+        for rule in totals.index:          # most frequent rule first
+            grp = frame[frame[rule_col] == rule].head(n)
+            lines.append(f"{rule}  ({totals[rule]} total cases -- showing {len(grp)})")
+            lines.append(f"  {'company_code':<14}{'document_nr':<16}transaction_id")
+            for r in grp.itertuples():
+                lines.append(f"  {r.company_code:<14}{r.document_nr:<16}{r.transaction_id}")
+            lines.append("")
+
+    section(f"HALLUCINATED -- AI flagged, ML did not (up to {n} cases per rule)",
+            hallucinated_rules, "hallucinated_rule")
+    section(f"MISSED -- ML flagged, AI did not (up to {n} cases per rule)",
+            missed_rules, "missed_rule")
+
+    text = "\n".join(lines)
+    path = os.path.join(out_dir, "adcms_lookup_samples.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text + "\n")
+    return path, text
+
+
 def main():
     results_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_RESULTS
     out_dir = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_OUT_DIR
@@ -113,9 +150,13 @@ def main():
         print("\nmissed rules, most frequent first:")
         print(missed_rules["missed_rule"].value_counts().to_string())
 
-    print(f"\nwrote 4 files to {out_dir}:")
+    sample_path, sample_text = write_adcms_samples(hallucinated_rules, missed_rules, out_dir)
+    print("\n" + sample_text)
+
+    print(f"wrote 5 files to {out_dir}:")
     for name in paths:
         print(f"  {name}")
+    print(f"  {os.path.basename(sample_path)}")
 
 
 if __name__ == "__main__":
