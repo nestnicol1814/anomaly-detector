@@ -32,21 +32,27 @@ DEFAULT_RESULTS = r"C:\Users\NGarbea\OneDrive - NESTLE\Documents\Anomaly_detecto
 DEFAULT_OUT_DIR = r"C:\Users\NGarbea\OneDrive - NESTLE\Documents\Anomaly_detector_demo"
 
 
+ID_PARTS = ["company_code", "document_nr", "fiscal_year", "supplier_nr", "sid"]
+
+
 def split_id(df):
-    """transaction_id is '<company_code>_<doc_nr>'. Split it back out so the
-    output can be joined against the source Excel files / looked up in SAP."""
-    parts = df["transaction_id"].str.split("_", n=1, expand=True)
+    """transaction_id is '<company_code>_<doc_nr>_<fiscal_year>_<supplier_nr>_<sid>'
+    (5 fixed parts; see loaders.make_transaction_id). Split it back out so the
+    output can be looked up in ADCMS / the source systems directly. Older
+    2-part ids split into the first two columns with the rest empty."""
+    parts = df["transaction_id"].str.split("_", n=len(ID_PARTS) - 1, expand=True)
     df = df.copy()
-    df.insert(1, "company_code", parts[0])
-    df.insert(2, "document_nr", parts[1])
+    for i, name in enumerate(ID_PARTS):
+        df.insert(1 + i, name, parts[i] if i in parts.columns else "")
+        df[name] = df[name].fillna("")
     return df
 
 
 def explode_rules(cases, list_col, rule_col_name):
     """Turn 'R03,R07' in one cell into one row per rule."""
     if cases.empty:
-        return pd.DataFrame(columns=["transaction_id", "company_code", "document_nr", rule_col_name])
-    out = cases[["transaction_id", "company_code", "document_nr", list_col]].copy()
+        return pd.DataFrame(columns=["transaction_id", *ID_PARTS, rule_col_name])
+    out = cases[["transaction_id", *ID_PARTS, list_col]].copy()
     out[rule_col_name] = out[list_col].str.split(",")
     out = out.explode(rule_col_name)
     out[rule_col_name] = out[rule_col_name].str.strip()
@@ -74,9 +80,10 @@ def write_adcms_samples(hallucinated_rules, missed_rules, out_dir, n=5):
         for rule in totals.index:          # most frequent rule first
             grp = frame[frame[rule_col] == rule].head(n)
             lines.append(f"{rule}  ({totals[rule]} total cases -- showing {len(grp)})")
-            lines.append(f"  {'company_code':<14}{'document_nr':<16}transaction_id")
+            lines.append(f"  {'company_code':<14}{'document_nr':<16}{'fiscal_year':<13}{'supplier_nr':<14}sid")
             for r in grp.itertuples():
-                lines.append(f"  {r.company_code:<14}{r.document_nr:<16}{r.transaction_id}")
+                lines.append(f"  {r.company_code:<14}{r.document_nr:<16}"
+                             f"{(r.fiscal_year or ''):<13}{(r.supplier_nr or ''):<14}{r.sid or ''}")
             lines.append("")
 
     section(f"HALLUCINATED -- AI flagged, ML did not (up to {n} cases per rule)",

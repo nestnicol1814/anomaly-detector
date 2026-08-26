@@ -25,7 +25,11 @@ from fraud_eval.verifier import verify
 # ---------------------------------------------------------------- fill these in
 BASE_PATH = r"TODO"                     # base transaction dataset (.csv or .xlsx)
 AI_PATH = r"TODO"                       # ADCMS export (.xlsx)
-BASE_KEY_COLS = {"company_code": "TODO", "doc_nr": "TODO"}
+# base columns for the 5-part join key (see loaders.make_transaction_id);
+# fiscal_year / supplier_nr / sid may be None if the base file lacks them,
+# but then keys will only match rows whose extra parts are also blank.
+BASE_KEY_COLS = {"company_code": "TODO", "doc_nr": "TODO",
+                 "fiscal_year": "TODO", "supplier_nr": "TODO", "sid": "TODO"}
 # ------------------------------------------------------------------------------
 
 CHUNK = 100_000                          # csv chunk size for the huge base file
@@ -35,14 +39,20 @@ def load_base(path, wanted_ids):
     """Read only needed columns, keep only wanted transaction_ids, return
     {transaction_id: row dict}. Duplicate base keys keep the FIRST row and
     are counted -- never silently multiplied into a join."""
-    usecols = list(BASE_KEY_COLS.values()) + base_columns_needed()
+    key_cols = {k: v for k, v in BASE_KEY_COLS.items() if v not in (None, "TODO")}
+    usecols = list(key_cols.values()) + base_columns_needed()
     ext = os.path.splitext(path)[1].lower()
 
     def rows(df):
         df = df.copy()
         df["_id"] = [
-            make_transaction_id(c, d)
-            for c, d in zip(df[BASE_KEY_COLS["company_code"]], df[BASE_KEY_COLS["doc_nr"]])
+            make_transaction_id(
+                r.get(key_cols["company_code"]), r.get(key_cols["doc_nr"]),
+                fiscal_year=r.get(key_cols.get("fiscal_year")),
+                supplier_nr=r.get(key_cols.get("supplier_nr")),
+                sid=r.get(key_cols.get("sid")),
+            )
+            for r in df.to_dict("records")
         ]
         return df[df["_id"].isin(wanted_ids)]
 
@@ -62,11 +72,18 @@ def load_base(path, wanted_ids):
 
 
 def main():
-    for name, val in (("BASE_PATH", BASE_PATH), ("AI_PATH", AI_PATH),
-                      *((f"BASE_KEY_COLS[{k}]", v) for k, v in BASE_KEY_COLS.items())):
+    required = (("BASE_PATH", BASE_PATH), ("AI_PATH", AI_PATH),
+                ("BASE_KEY_COLS[company_code]", BASE_KEY_COLS["company_code"]),
+                ("BASE_KEY_COLS[doc_nr]", BASE_KEY_COLS["doc_nr"]))
+    for name, val in required:
         if val == "TODO":
             raise SystemExit(f"{name} is still TODO -- fill it in at the top of verify_ai.py "
                              f"(and FIELD_MAP in fraud_eval/rule_specs.py)")
+    todo_extras = [k for k in ("fiscal_year", "supplier_nr", "sid")
+                   if BASE_KEY_COLS.get(k) == "TODO"]
+    if todo_extras:
+        print(f"WARNING: base key parts not mapped ({', '.join(todo_extras)}) -- "
+              f"keys will only match AI rows whose corresponding parts are blank")
 
     ai_table, ai_report = load_AI_table(AI_PATH)
     print(ai_report.summary())

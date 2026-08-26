@@ -91,13 +91,25 @@ def normalize_doc_nr(value):
     return s
 
 
-def make_transaction_id(company_code, doc_nr):
-    """The ONE place the join key is built. Returns None if either part is missing."""
+def make_transaction_id(company_code, doc_nr, fiscal_year=None, supplier_nr=None, sid=None):
+    """The ONE place the join key is built, for every dataset.
+
+    company_code + doc_nr alone proved NOT unique enough, so the key now also
+    carries fiscal year, supplier nr and SID. Key format (5 parts, fixed order):
+
+        <company_code>_<doc_nr>_<fiscal_year>_<supplier_nr>_<sid>
+
+    Returns None if company_code or doc_nr is missing (row unusable). The
+    extra parts become "" when missing -- the key still has 5 parts, so
+    splitting stays deterministic. All numeric-looking parts get the same
+    leading-zero normalization as doc_nr so both files build identical keys.
+    """
     cc = normalize_company_code(company_code)
     doc = normalize_doc_nr(doc_nr)
     if cc is None or doc is None:
         return None
-    return f"{cc}_{doc}"
+    extras = [normalize_doc_nr(p) or "" for p in (fiscal_year, supplier_nr, sid)]
+    return "_".join([cc, doc, *extras])
 
 
 @dataclass
@@ -156,14 +168,23 @@ def load_ml_table(excel_path, on_duplicate="last"):
                    with several rule-hit rows becomes one record with all its rules)
         "error" -> raise
     """
-    df = _read_excel_text_keys(excel_path, ["[Company Code]", "[Document Nr]"], "ML table")
+    df = _read_excel_text_keys(
+        excel_path,
+        ["[Company Code]", "[Document Nr]", "[SID]", "[Fiscal Year]", "[Supplier Nr]"],
+        "ML table",
+    )
     if "[Rule Marker]" not in df.columns:
         raise ValueError(f"ML table {excel_path} is missing required column(s): ['[Rule Marker]']")
 
     table, report = {}, LoadReport(path=excel_path, n_raw=len(df))
 
     for idx, row in df.iterrows():
-        transaction_id = make_transaction_id(row.get("[Company Code]"), row.get("[Document Nr]"))
+        transaction_id = make_transaction_id(
+            row.get("[Company Code]"), row.get("[Document Nr]"),
+            fiscal_year=row.get("[Fiscal Year]"),
+            supplier_nr=row.get("[Supplier Nr]"),
+            sid=row.get("[SID]"),
+        )
         if transaction_id is None:
             report.n_blank_key += 1
             if len(report.blank_rows) < 10:
@@ -183,7 +204,9 @@ def load_ml_table(excel_path, on_duplicate="last"):
             "metadata": {
                 "company_code": normalize_company_code(row.get("[Company Code]")),
                 "document_nr": normalize_doc_nr(row.get("[Document Nr]")),
-                "supplier_nr": _cell(row, "[Supplier Nr]"),
+                "fiscal_year": normalize_doc_nr(row.get("[Fiscal Year]")),
+                "supplier_nr": normalize_doc_nr(row.get("[Supplier Nr]")),
+                "sid": normalize_doc_nr(row.get("[SID]")),
                 "supplier_name": _cell(row, "[Supplier name]"),
                 "source_row": idx + 2,
             },
@@ -209,7 +232,11 @@ def load_AI_table(excel_path, on_duplicate="last"):
         report = LoadReport with row accounting
     on_duplicate: see load_ml_table.
     """
-    df = _read_excel_text_keys(excel_path, ["COMPANY_CODE", "DOCUMENT_NR"], "AI table")
+    df = _read_excel_text_keys(
+        excel_path,
+        ["COMPANY_CODE", "DOCUMENT_NR", "SID", "FISCAL_YEAR", "SUPPLIER_NR"],
+        "AI table",
+    )
 
     rule_cols = [rid for rid in RULE_FLAGS if rid in df.columns]
     if not rule_cols:
@@ -221,7 +248,12 @@ def load_AI_table(excel_path, on_duplicate="last"):
     table, report = {}, LoadReport(path=excel_path, n_raw=len(df))
 
     for idx, row in df.iterrows():
-        transaction_id = make_transaction_id(row.get("COMPANY_CODE"), row.get("DOCUMENT_NR"))
+        transaction_id = make_transaction_id(
+            row.get("COMPANY_CODE"), row.get("DOCUMENT_NR"),
+            fiscal_year=row.get("FISCAL_YEAR"),
+            supplier_nr=row.get("SUPPLIER_NR"),
+            sid=row.get("SID"),
+        )
         if transaction_id is None:
             report.n_blank_key += 1
             if len(report.blank_rows) < 10:
@@ -240,7 +272,9 @@ def load_AI_table(excel_path, on_duplicate="last"):
             "metadata": {
                 "company_code": normalize_company_code(row.get("COMPANY_CODE")),
                 "document_nr": normalize_doc_nr(row.get("DOCUMENT_NR")),
-                "supplier_nr": _cell(row, "SUPPLIER_NR"),
+                "fiscal_year": normalize_doc_nr(row.get("FISCAL_YEAR")),
+                "supplier_nr": normalize_doc_nr(row.get("SUPPLIER_NR")),
+                "sid": normalize_doc_nr(row.get("SID")),
                 "supplier_name": _cell(row, "COMPANY_NAME"),
                 "source_row": idx + 2,
             },
