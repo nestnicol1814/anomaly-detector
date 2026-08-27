@@ -32,14 +32,15 @@ DEFAULT_RESULTS = r"C:\Users\NGarbea\OneDrive - NESTLE\Documents\Anomaly_detecto
 DEFAULT_OUT_DIR = r"C:\Users\NGarbea\OneDrive - NESTLE\Documents\Anomaly_detector_demo"
 
 
-ID_PARTS = ["company_code", "document_nr", "fiscal_year", "supplier_nr", "sid"]
+ID_PARTS = ["company_code", "document_nr", "fiscal_year", "supplier_nr", "sid",
+            "item", "data_marker"]
 
 
 def split_id(df):
-    """transaction_id is '<company_code>_<doc_nr>_<fiscal_year>_<supplier_nr>_<sid>'
-    (5 fixed parts; see loaders.make_transaction_id). Split it back out so the
-    output can be looked up in ADCMS / the source systems directly. Older
-    2-part ids split into the first two columns with the rest empty."""
+    """transaction_id has 7 fixed underscore-separated parts (see
+    loaders.make_transaction_id). Split it back out so the output can be
+    looked up in ADCMS / the source systems directly. Older shorter ids
+    split into the leading columns with the rest empty."""
     parts = df["transaction_id"].str.split("_", n=len(ID_PARTS) - 1, expand=True)
     df = df.copy()
     for i, name in enumerate(ID_PARTS):
@@ -80,10 +81,12 @@ def write_adcms_samples(hallucinated_rules, missed_rules, out_dir, n=5):
         for rule in totals.index:          # most frequent rule first
             grp = frame[frame[rule_col] == rule].head(n)
             lines.append(f"{rule}  ({totals[rule]} total cases -- showing {len(grp)})")
-            lines.append(f"  {'company_code':<14}{'document_nr':<16}{'fiscal_year':<13}{'supplier_nr':<14}sid")
+            lines.append(f"  {'company_code':<14}{'document_nr':<16}{'fiscal_year':<13}"
+                         f"{'supplier_nr':<14}{'sid':<8}{'item':<7}data_marker")
             for r in grp.itertuples():
                 lines.append(f"  {r.company_code:<14}{r.document_nr:<16}"
-                             f"{(r.fiscal_year or ''):<13}{(r.supplier_nr or ''):<14}{r.sid or ''}")
+                             f"{(r.fiscal_year or ''):<13}{(r.supplier_nr or ''):<14}"
+                             f"{(r.sid or ''):<8}{(r.item or ''):<7}{r.data_marker or ''}")
             lines.append("")
 
     section(f"HALLUCINATED -- AI flagged, ML did not (up to {n} cases per rule)",

@@ -91,24 +91,28 @@ def normalize_doc_nr(value):
     return s
 
 
-def make_transaction_id(company_code, doc_nr, fiscal_year=None, supplier_nr=None, sid=None):
+def make_transaction_id(company_code, doc_nr, fiscal_year=None, supplier_nr=None,
+                        sid=None, item=None, data_marker=None):
     """The ONE place the join key is built, for every dataset.
 
-    company_code + doc_nr alone proved NOT unique enough, so the key now also
-    carries fiscal year, supplier nr and SID. Key format (5 parts, fixed order):
+    company_code + doc_nr alone proved NOT unique enough, so the key also
+    carries fiscal year, supplier nr, SID, item and data marker. Key format
+    (7 parts, fixed order):
 
-        <company_code>_<doc_nr>_<fiscal_year>_<supplier_nr>_<sid>
+        <company_code>_<doc_nr>_<fiscal_year>_<supplier_nr>_<sid>_<item>_<data_marker>
 
     Returns None if company_code or doc_nr is missing (row unusable). The
-    extra parts become "" when missing -- the key still has 5 parts, so
+    extra parts become "" when missing -- the key still has 7 parts, so
     splitting stays deterministic. All numeric-looking parts get the same
-    leading-zero normalization as doc_nr so both files build identical keys.
+    leading-zero normalization as doc_nr so both files build identical keys
+    (e.g. ML item "001" as text and AI ITEM 1 as a number both become "1").
     """
     cc = normalize_company_code(company_code)
     doc = normalize_doc_nr(doc_nr)
     if cc is None or doc is None:
         return None
-    extras = [normalize_doc_nr(p) or "" for p in (fiscal_year, supplier_nr, sid)]
+    extras = [normalize_doc_nr(p) or ""
+              for p in (fiscal_year, supplier_nr, sid, item, data_marker)]
     return "_".join([cc, doc, *extras])
 
 
@@ -170,7 +174,8 @@ def load_ml_table(excel_path, on_duplicate="last"):
     """
     df = _read_excel_text_keys(
         excel_path,
-        ["[Company Code]", "[Document Nr]", "[SID]", "[Fiscal Year]", "[Supplier Nr]"],
+        ["[Company Code]", "[Document Nr]", "[SID]", "[Fiscal Year]", "[Supplier Nr]",
+         "[Item]", "[Data Marker]"],
         "ML table",
     )
     if "[Rule Marker]" not in df.columns:
@@ -184,6 +189,8 @@ def load_ml_table(excel_path, on_duplicate="last"):
             fiscal_year=row.get("[Fiscal Year]"),
             supplier_nr=row.get("[Supplier Nr]"),
             sid=row.get("[SID]"),
+            item=row.get("[Item]"),
+            data_marker=row.get("[Data Marker]"),
         )
         if transaction_id is None:
             report.n_blank_key += 1
@@ -207,6 +214,8 @@ def load_ml_table(excel_path, on_duplicate="last"):
                 "fiscal_year": normalize_doc_nr(row.get("[Fiscal Year]")),
                 "supplier_nr": normalize_doc_nr(row.get("[Supplier Nr]")),
                 "sid": normalize_doc_nr(row.get("[SID]")),
+                "item": normalize_doc_nr(row.get("[Item]")),
+                "data_marker": normalize_doc_nr(row.get("[Data Marker]")),
                 "supplier_name": _cell(row, "[Supplier name]"),
                 "source_row": idx + 2,
             },
@@ -234,7 +243,8 @@ def load_AI_table(excel_path, on_duplicate="last"):
     """
     df = _read_excel_text_keys(
         excel_path,
-        ["COMPANY_CODE", "DOCUMENT_NR", "SID", "FISCAL_YEAR", "SUPPLIER_NR"],
+        ["COMPANY_CODE", "DOCUMENT_NR", "SID", "FISCAL_YEAR", "SUPPLIER_NR",
+         "ITEM", "DATA_MARKER"],
         "AI table",
     )
 
@@ -253,6 +263,8 @@ def load_AI_table(excel_path, on_duplicate="last"):
             fiscal_year=row.get("FISCAL_YEAR"),
             supplier_nr=row.get("SUPPLIER_NR"),
             sid=row.get("SID"),
+            item=row.get("ITEM"),
+            data_marker=row.get("DATA_MARKER"),
         )
         if transaction_id is None:
             report.n_blank_key += 1
@@ -275,6 +287,8 @@ def load_AI_table(excel_path, on_duplicate="last"):
                 "fiscal_year": normalize_doc_nr(row.get("FISCAL_YEAR")),
                 "supplier_nr": normalize_doc_nr(row.get("SUPPLIER_NR")),
                 "sid": normalize_doc_nr(row.get("SID")),
+                "item": normalize_doc_nr(row.get("ITEM")),
+                "data_marker": normalize_doc_nr(row.get("DATA_MARKER")),
                 "supplier_name": _cell(row, "COMPANY_NAME"),
                 "source_row": idx + 2,
             },

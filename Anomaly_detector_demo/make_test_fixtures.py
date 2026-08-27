@@ -21,6 +21,8 @@ ml = pd.DataFrame({
     "[Fiscal Year]":  ["2026", "2026", "2026", "2026", "2026", "2026", "2026"],
     "[Supplier Nr]":  ["V1", "V1", "V1", "V2", "V3", "V4", "V9"],
     "[SID]":          ["901", "901", "901", "902", "903", "904", "909"],   # text here, number in AI
+    "[Item]":         ["001", "001", "001", "001", "002", "001", "001"],   # text "001" -> must match AI numeric 1
+    "[Data Marker]":  ["M1", "M1", "M1", "M0", "M0", "M0", "M0"],
     "[Supplier name]": ["Acme", "Acme", "Acme", "Beta", "Gamma", "Delta", "OnlyInML"],
     "[Rule Marker]":  ["R03", "R07", "R14", "", "R06", "R01,R02", "R09"],
 })
@@ -34,6 +36,8 @@ ai = pd.DataFrame({
     "FISCAL_YEAR":  [2026, 2026, 2026, 2026, 2026, 2026],     # numeric vs ML's text
     "SUPPLIER_NR":  ["V1", "V2", "V3", "V4", "V5", "V8"],
     "SID":          [901, 902, 903, 904, 905, 908],           # numeric vs ML's text
+    "ITEM":         [1, 1, 2, 1, 1, 1],                       # numeric 1 vs ML's text "001"
+    "DATA_MARKER":  ["M1", "M0", "M0", "M0", "M0", "M0"],
     "COMPANY_NAME": ["Acme", "Beta", "Gamma", "Delta", "Blank", "OnlyInAI"],
     "R01": [0, 0, 0, 1, 0, 0],
     "R02": [0, 0, 0, 1, 0, 0],

@@ -29,7 +29,8 @@ AI_PATH = r"TODO"                       # ADCMS export (.xlsx)
 # fiscal_year / supplier_nr / sid may be None if the base file lacks them,
 # but then keys will only match rows whose extra parts are also blank.
 BASE_KEY_COLS = {"company_code": "TODO", "doc_nr": "TODO",
-                 "fiscal_year": "TODO", "supplier_nr": "TODO", "sid": "TODO"}
+                 "fiscal_year": "TODO", "supplier_nr": "TODO", "sid": "TODO",
+                 "item": "TODO", "data_marker": "TODO"}
 # ------------------------------------------------------------------------------
 
 CHUNK = 100_000                          # csv chunk size for the huge base file
@@ -51,6 +52,8 @@ def load_base(path, wanted_ids):
                 fiscal_year=r.get(key_cols.get("fiscal_year")),
                 supplier_nr=r.get(key_cols.get("supplier_nr")),
                 sid=r.get(key_cols.get("sid")),
+                item=r.get(key_cols.get("item")),
+                data_marker=r.get(key_cols.get("data_marker")),
             )
             for r in df.to_dict("records")
         ]
@@ -79,7 +82,7 @@ def main():
         if val == "TODO":
             raise SystemExit(f"{name} is still TODO -- fill it in at the top of verify_ai.py "
                              f"(and FIELD_MAP in fraud_eval/rule_specs.py)")
-    todo_extras = [k for k in ("fiscal_year", "supplier_nr", "sid")
+    todo_extras = [k for k in ("fiscal_year", "supplier_nr", "sid", "item", "data_marker")
                    if BASE_KEY_COLS.get(k) == "TODO"]
     if todo_extras:
         print(f"WARNING: base key parts not mapped ({', '.join(todo_extras)}) -- "
