@@ -174,7 +174,7 @@ def load_ml_table(excel_path, on_duplicate="last"):
     """
     df = _read_excel_text_keys(
         excel_path,
-        ["[Company Code]", "[Document Nr]", "[SID]", "[Fiscal Year]", "[Supplier Nr]",
+        ["[Company Code]", "[Document Nr]", "[SID]", "[Fiscal year]", "[Supplier Nr]",
          "[Item]", "[Data Marker]"],
         "ML table",
     )
@@ -186,7 +186,7 @@ def load_ml_table(excel_path, on_duplicate="last"):
     for idx, row in df.iterrows():
         transaction_id = make_transaction_id(
             row.get("[Company Code]"), row.get("[Document Nr]"),
-            fiscal_year=row.get("[Fiscal Year]"),
+            fiscal_year=row.get("[Fiscal year]"),
             supplier_nr=row.get("[Supplier Nr]"),
             sid=row.get("[SID]"),
             item=row.get("[Item]"),
@@ -211,7 +211,7 @@ def load_ml_table(excel_path, on_duplicate="last"):
             "metadata": {
                 "company_code": normalize_company_code(row.get("[Company Code]")),
                 "document_nr": normalize_doc_nr(row.get("[Document Nr]")),
-                "fiscal_year": normalize_doc_nr(row.get("[Fiscal Year]")),
+                "fiscal_year": normalize_doc_nr(row.get("[Fiscal year]")),
                 "supplier_nr": normalize_doc_nr(row.get("[Supplier Nr]")),
                 "sid": normalize_doc_nr(row.get("[SID]")),
                 "item": normalize_doc_nr(row.get("[Item]")),
