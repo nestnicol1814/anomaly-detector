@@ -9,7 +9,7 @@ that dominates the tally is the one wrongly splitting real matches (e.g. the
 two systems record data_marker differently, or one export is document-level
 while the other is line-item level).
 
-    python diagnose_key_parts.py "path\to\ML extract.xlsx" "path\to\AI export.xlsx"
+    python diagnose_key_parts.py "path/to/ML extract.xlsx" "path/to/AI export.xlsx"
 
 Read-only.
 """
