@@ -139,7 +139,12 @@ def main():
         "missed_rules.csv": missed_rules,
     }
     for name, frame in paths.items():
-        frame.to_csv(os.path.join(out_dir, name), index=False)
+        target = os.path.join(out_dir, name)
+        try:
+            frame.to_csv(target, index=False)
+        except PermissionError:
+            sys.exit(f"Cannot write {target} -- the file is locked, almost certainly "
+                     f"open in Excel. Close it (and any other output CSVs) and rerun.")
 
     # --- console summary ---
     n = len(df)
