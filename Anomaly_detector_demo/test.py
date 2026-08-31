@@ -1,25 +1,31 @@
-import warnings
-
+import sys
+import os
 import pandas as pd
+import warnings
+from io import StringIO
 
+# Suppress ALL output
+pd.set_option('display.max_rows', 0)
+pd.set_option('display.max_columns', 0)
 warnings.filterwarnings('ignore')
 
 from fraud_eval import AnomalyEval
 
-# Paths live in my_paths.py (gitignored) so pulls/resets never wipe them.
-# First time: copy my_paths_example.py -> my_paths.py and put your paths there.
-try:
-    from my_paths import ML_CSV, AI_CSV, RESULTS_CSV
-except ImportError:
-    raise SystemExit(
-        "my_paths.py not found. Copy my_paths_example.py to my_paths.py "
-        "(same folder) and set your file paths there -- one-time setup."
-    )
 
+# Run silently
 ev = AnomalyEval()
-results = ev.run(ai_csv=AI_CSV, ml_csv=ML_CSV)
-
+results = ev.run(
+    ai_csv="C:\\Users\\NGarbea\\OneDrive - NESTLE\\Documents\\Anomaly_detector_demo\\ADCMS Case Rules 2026 Export.xlsx",
+    ml_csv="C:\\Users\\NGarbea\\OneDrive - NESTLE\\Documents\\Anomaly_detector_demo\\Report Case Extract.xlsx"
+)
+data2 = pd.DataFrame(results.per_case)
 per_case_df = pd.DataFrame(results.per_case)
-ev.print_summary(results)
-per_case_df.to_csv(RESULTS_CSV, index=False)
-print(f"\nwrote {len(per_case_df)} rows to {RESULTS_CSV}")
+print(per_case_df)  # All columns: transaction_id, precision, recall, f1, TP, FP, FN, etc.
+
+print(f"\nAvg Precision: {results.aggregate['avg_precision']}")
+print(f"Avg Recall: {results.aggregate['avg_recall']}")
+print(f"Avg F1: {results.aggregate['avg_f1']}")
+print(f"Total Hallucinated: {results.aggregate['total_hallucinated_rules']}")
+
+print(data2.head())  # Show first few rows of the per-case results
+data2.to_csv("C:\\Users\\NGarbea\\OneDrive - NESTLE\\Documents\\Anomaly_detector_demo\\per_case_results.csv", index=False)
